@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Charting Library + UDF (Binance)</title>
+
+  <!--
+    ⚠️ REQUIRES THE LICENSED CHARTING LIBRARY.
+    Needs the private `charting_library/` folder AND the bundled UDF adapter
+    (`datafeeds/udf/dist/bundle.js`) from your TradingView repo next to this file.
+    The backend it talks to is udf-server.js — start it with:  node udf-server.js
+  -->
+  <script src="charting_library/charting_library.standalone.js"></script>
+  <script src="datafeeds/udf/dist/bundle.js"></script>
+  <!-- Adds real-time streaming (Binance WebSocket) on top of the UDF adapter. -->
+  <script src="udf-streaming.js"></script>
+
+  <style>
+    html, body { margin: 0; height: 100%; }
+    #chart { position: absolute; inset: 0; }
+  </style>
+</head>
+<body>
+  <div id="chart"></div>
+
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {
+      // UDF adapter for history/search/resolve + Binance WebSocket for real-time.
+      // History still comes over HTTP from udf-server.js; live bars now stream.
+      const datafeed = createStreamingUDFDatafeed('http://localhost:8000');
+
+      new TradingView.widget({
+        container: 'chart',
+        library_path: 'charting_library/',
+        datafeed: datafeed,
+        symbol: 'BTCUSDT',
+        interval: '60',
+        locale: 'en',
+        fullscreen: true,
+        autosize: true,
+        theme: 'dark',
+        debug: true,
+      });
+    });
+  </script>
+</body>
+</html>
