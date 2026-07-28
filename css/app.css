@@ -167,7 +167,7 @@ body {
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: 8px;
-    box-shadow: 0 14px 36px rgb(0 0 0 / 0.4);
+    box-shadow: 0 8px 18px rgb(0 0 0 / 0.32);
 }
 
 .menu[hidden] { display: none; }
@@ -303,6 +303,7 @@ body {
     border-radius: 50%;
     background: #ffffff;
     transition: transform 0.15s ease;
+    will-change: transform;
 }
 
 .switch:checked { background: var(--accent); }
@@ -522,7 +523,7 @@ body {
     border: 1px solid var(--border-strong);
     border-left: 3px solid var(--warn);
     border-radius: 5px;
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+    box-shadow: 0 8px 18px rgb(0 0 0 / 0.28);
     line-height: 1.4;
 }
 
