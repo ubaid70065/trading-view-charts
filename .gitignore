@@ -1,1 +1,12 @@
-node_modules
+# Credentials — never commit
+.env
+.env.*
+!.env.example
+
+# Cached instrument master (~33 MB, rebuilt on demand)
+data/
+
+node_modules/
+.DS_Store
+Thumbs.db
+*.log

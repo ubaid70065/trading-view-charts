@@ -1,5 +1,16 @@
 {
-  "dependencies": {
-    "lightweight-charts": "https://pkg.pr.new/lightweight-charts@master"
+  "name": "advanced-chart-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Multi-chart trading workspace built on TradingView's free embeddable widgets",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "serve:9090": "node server.js 9090",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
