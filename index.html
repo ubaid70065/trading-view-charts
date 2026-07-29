@@ -2,10 +2,34 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Advanced Chart</title>
+
+    <!--
+      The charts are the slow part: each pane fetches a vendor script from
+      s3.tradingview.com and then opens a frame on tradingview-widget.com.
+      Warming both connections here overlaps DNS and TLS with parsing this
+      document instead of waiting for the first pane to ask.
+    -->
+    <link rel="preconnect" href="https://s3.tradingview.com" crossorigin>
+    <link rel="preconnect" href="https://www.tradingview-widget.com" crossorigin>
+
     <link rel="stylesheet" href="css/app.css">
+
+    <!--
+      ES modules are discovered one level at a time: without these the browser
+      learns about panes.js only after main.js parses, and about widget.js only
+      after that. Naming the graph up front collapses those round trips into one.
+    -->
+    <link rel="modulepreload" href="src/main.js">
+    <link rel="modulepreload" href="src/config.js">
+    <link rel="modulepreload" href="src/state.js">
+    <link rel="modulepreload" href="src/panes.js">
+    <link rel="modulepreload" href="src/widget.js">
+    <link rel="modulepreload" href="src/header.js">
+    <link rel="modulepreload" href="src/layout-picker.js">
+    <link rel="modulepreload" href="src/search.js">
+    <link rel="modulepreload" href="src/shortcuts.js">
 </head>
 <body>
     <header class="topbar">
@@ -15,6 +39,14 @@
             <span class="status" id="status" data-state="detecting">detecting…</span>
         </div>
 
+        <form class="topbar__search" id="searchForm" role="search">
+            <span class="search__icon" aria-hidden="true">⌕</span>
+            <input type="search" class="search__input" id="symbolSearch"
+                   placeholder="Search a symbol, press Enter — NASDAQ:AAPL, NSE:RELIANCE"
+                   aria-label="Symbol search" autocomplete="off" spellcheck="false">
+            <button type="button" class="search__scope" id="searchScope" aria-pressed="true">All charts</button>
+        </form>
+
         <nav class="topbar__actions">
             <div class="menu-wrap">
                 <button type="button" class="btn" id="layoutBtn" aria-haspopup="true" aria-expanded="false" aria-controls="layoutMenu" title="Choose a chart layout (Alt+L)">
@@ -23,20 +55,8 @@
                 <div class="menu" id="layoutMenu" role="menu" hidden></div>
             </div>
 
-            <button type="button" class="btn" id="themeBtn" title="Toggle dark / light theme">
+            <button type="button" class="btn" id="themeBtn" title="Toggle dark / light theme (Alt+D)">
                 <span class="btn__icon" aria-hidden="true">☾</span><span class="btn__text">Dark</span>
-            </button>
-
-            <button type="button" class="btn" id="snapshotBtn" title="Save a PNG of the workspace">
-                <span class="btn__icon" aria-hidden="true">▣</span><span class="btn__text">Snapshot</span>
-            </button>
-
-            <button type="button" class="btn" id="shortcutsBtn" title="Keyboard shortcuts">
-                <span class="btn__icon" aria-hidden="true">⌘</span><span class="btn__text">Shortcuts</span>
-            </button>
-
-            <button type="button" class="btn" id="settingsBtn" title="Settings">
-                <span class="btn__icon" aria-hidden="true">⚙</span><span class="btn__text">Settings</span>
             </button>
         </nav>
     </header>
@@ -46,7 +66,6 @@
     <main class="panes" id="panesHost"></main>
 
     <footer class="footbar">
-        <div class="tabs" id="tabsHost"></div>
         <div class="attribution" id="attributionHost"></div>
     </footer>
 

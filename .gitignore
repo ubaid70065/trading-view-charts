@@ -10,3 +10,7 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.log
+
+# Advanced Charts — licensed per user, not redistributable.
+# Request access from TradingView and drop the folder in yourself.
+public/charting_library/

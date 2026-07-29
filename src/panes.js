@@ -2,22 +2,56 @@
  * The chart pane grid.
  *
  * Each pane is an independent widget iframe. Because re-embedding reloads a
- * chart, panes are diffed by a settings signature: switching layout or tab
- * rebuilds the grid, but editing one pane's symbol only re-embeds that pane.
+ * chart, panes are diffed by a settings signature: switching layout rebuilds the
+ * grid, but editing one pane's symbol only re-embeds that pane.
  *
  * Placement comes from layoutGeometry(), so the grid always matches the icon
  * that selected it.
  */
 
-import { chartSettings, intervalLabel, layoutById, layoutGeometry } from './config.js';
+import {
+    chartSettings, intervalLabel, layoutById, layoutGeometry, nearestNseInterval,
+} from './config.js';
 import { embedChart } from './widget.js';
-import { mountNseChart, nearestNseInterval } from './nse/chart.js';
+
+/**
+ * The in-page sources, loaded on demand.
+ *
+ * Each pulls in a chart bundle — Lightweight Charts for two of them, the 5 MB
+ * Advanced Charts library for the third. That is dead weight on a workspace
+ * made of widget panes, which is every workspace until one is switched over, so
+ * each module stays off the boot path until a pane actually asks for it.
+ *
+ * Everything not in this table is the embed: an iframe, handled by widget.js.
+ *
+ * @type {Record<string, {label: string, load: () => Promise<Function>}>}
+ */
+const IN_PAGE_SOURCES = {
+    nse: {
+        label: 'NSE',
+        load: () => import('./nse/chart.js').then((module) => module.mountNseChart),
+    },
+    tvfeed: {
+        label: 'feed',
+        load: () => import('./tv/chart.js').then((module) => module.mountTvChart),
+    },
+    advanced: {
+        label: 'advanced',
+        load: () => import('./tv/advanced.js').then((module) => module.mountAdvancedChart),
+    },
+};
+
+/** Dynamic import caches the module, but not the property lookup after it. */
+const mounters = new Map();
+const loadMounter = (source) => {
+    if (!mounters.has(source)) mounters.set(source, IN_PAGE_SOURCES[source].load());
+    return mounters.get(source);
+};
 
 /**
  * @param {HTMLElement} host
  * @param {object} handlers
  * @param {(index: number) => void} handlers.onActivate
- * @param {(index: number) => void} handlers.onToggleMaximise
  * @param {(message: string) => void} handlers.onError
  */
 export function createPaneGrid(host, handlers) {
@@ -39,7 +73,7 @@ export function createPaneGrid(host, handlers) {
         }, 0);
     });
 
-    function buildPane(index, isMaximised) {
+    function buildPane(index) {
         const wrapper = document.createElement('section');
         wrapper.className = 'pane';
         wrapper.dataset.index = String(index);
@@ -49,22 +83,7 @@ export function createPaneGrid(host, handlers) {
 
         const label = document.createElement('span');
         label.className = 'pane__label';
-
-        const spacer = document.createElement('span');
-        spacer.className = 'pane__spacer';
-
-        const maximise = document.createElement('button');
-        maximise.type = 'button';
-        maximise.className = 'pane__btn';
-        maximise.title = isMaximised ? 'Restore layout' : 'Maximise this chart';
-        maximise.setAttribute('aria-label', maximise.title);
-        maximise.textContent = isMaximised ? '⤡' : '⤢';
-        maximise.addEventListener('click', (event) => {
-            event.stopPropagation();
-            handlers.onToggleMaximise(index);
-        });
-
-        header.append(label, spacer, maximise);
+        header.append(label);
 
         const chartHost = document.createElement('div');
         chartHost.className = 'pane__chart';
@@ -75,69 +94,57 @@ export function createPaneGrid(host, handlers) {
         return { wrapper, chartHost, handle: null, signature: '', label };
     }
 
-    function render(state, tab) {
-        const maximised = typeof tab.maximised === 'number' ? tab.maximised : null;
-        const layout = layoutById(tab.layout);
-        const geometry = layoutGeometry(layout);
-
-        const visible = maximised === null
-            ? tab.panes.map((pane, index) => ({ pane, index }))
-            : [{ pane: tab.panes[maximised], index: maximised }];
+    function render(state) {
+        const geometry = layoutGeometry(layoutById(state.layout));
 
         // Rebuilding the grid destroys every iframe, so only do it when the
         // arrangement itself changed.
-        const nextGridKey = `${tab.id}|${tab.layout}|${maximised}`;
-        if (nextGridKey !== gridKey) {
+        if (state.layout !== gridKey) {
             for (const entry of entries) {
                 if (entry.handle) entry.handle.destroy();
             }
             entries = [];
             host.replaceChildren();
 
-            if (maximised === null) {
-                host.style.setProperty('--grid-cols', `repeat(${geometry.cols}, 1fr)`);
-                host.style.setProperty('--grid-rows', `repeat(${geometry.rows}, 1fr)`);
-            } else {
-                host.style.setProperty('--grid-cols', '1fr');
-                host.style.setProperty('--grid-rows', '1fr');
-            }
-            host.dataset.panes = String(visible.length);
+            host.style.setProperty('--grid-cols', `repeat(${geometry.cols}, 1fr)`);
+            host.style.setProperty('--grid-rows', `repeat(${geometry.rows}, 1fr)`);
+            host.dataset.panes = String(state.panes.length);
 
-            visible.forEach(({ index }, position) => {
-                const entry = buildPane(index, maximised !== null);
-                const cell = maximised === null
-                    ? geometry.cells[position]
-                    : { col: 1, row: 1, colSpan: 1, rowSpan: 1 };
+            state.panes.forEach((pane, index) => {
+                const entry = buildPane(index);
+                const cell = geometry.cells[index];
                 entry.wrapper.style.gridColumn = `${cell.col} / span ${cell.colSpan}`;
                 entry.wrapper.style.gridRow = `${cell.row} / span ${cell.rowSpan}`;
                 entries.push(entry);
                 host.append(entry.wrapper);
             });
-            gridKey = nextGridKey;
+            gridKey = state.layout;
         }
 
         // The last pane carries the watchlist and details bar — there is only
-        // room for one. A maximised pane takes it over.
-        const panelIndex = visible.length - 1;
+        // room for one.
+        const panelIndex = state.panes.length - 1;
 
-        visible.forEach(({ pane, index }, position) => {
-            const entry = entries[position];
+        state.panes.forEach((pane, index) => {
+            const entry = entries[index];
             if (!entry) return;
 
-            entry.wrapper.classList.toggle('pane--active', index === tab.activePane);
+            entry.wrapper.classList.toggle('pane--active', index === state.activePane);
 
-            const isNse = pane.source === 'nse';
+            const inPage = IN_PAGE_SOURCES[pane.source];
             // NSE symbols carry no exchange prefix, and Angel One serves only a
-            // subset of intervals — show what the pane will actually load.
-            const shownInterval = isNse ? nearestNseInterval(pane.interval) : pane.interval;
-            entry.label.textContent = isNse
-                ? `${pane.symbol}  ·  ${intervalLabel(shownInterval)}  ·  NSE`
-                : `${pane.symbol}  ·  ${intervalLabel(shownInterval)}`;
+            // subset of intervals — show what the pane will actually load. The
+            // TradingView sources serve every interval the widget does.
+            const shownInterval = pane.source === 'nse'
+                ? nearestNseInterval(pane.interval)
+                : pane.interval;
+            const suffix = inPage ? `  ·  ${inPage.label}` : '';
+            entry.label.textContent = `${pane.symbol}  ·  ${intervalLabel(shownInterval)}${suffix}`;
 
-            // Both sources are diffed the same way: rebuild only on real change.
-            const settings = isNse
-                ? { source: 'nse', symbol: pane.symbol, interval: shownInterval, theme: state.theme }
-                : chartSettings(state, pane, position === panelIndex);
+            // Every source is diffed the same way: rebuild only on real change.
+            const settings = inPage
+                ? { source: pane.source, symbol: pane.symbol, interval: shownInterval, theme: state.theme }
+                : chartSettings(state, pane, index === panelIndex);
 
             const signature = JSON.stringify(settings);
             if (signature === entry.signature) return;
@@ -145,13 +152,32 @@ export function createPaneGrid(host, handlers) {
             if (entry.handle) entry.handle.destroy();
             entry.signature = signature;
 
-            if (isNse) {
-                entry.chartHost.classList.remove('is-loading');
-                entry.handle = mountNseChart(entry.chartHost, {
-                    symbol: pane.symbol,
-                    interval: shownInterval,
-                    theme: state.theme,
-                    onError: handlers.onError,
+            if (inPage) {
+                entry.chartHost.classList.add('is-loading');
+                // A handle has to exist synchronously — the next render may
+                // destroy this pane before the module resolves, and that must
+                // cancel the mount rather than leave an orphan chart behind.
+                let live = true;
+                entry.handle = {
+                    destroy() {
+                        live = false;
+                        entry.chartHost.replaceChildren();
+                    },
+                };
+
+                loadMounter(pane.source).then((mount) => {
+                    if (!live) return;
+                    entry.chartHost.classList.remove('is-loading');
+                    entry.handle = mount(entry.chartHost, {
+                        symbol: pane.symbol,
+                        interval: shownInterval,
+                        theme: state.theme,
+                        onError: handlers.onError,
+                    });
+                }).catch(() => {
+                    if (!live) return;
+                    entry.chartHost.classList.remove('is-loading');
+                    handlers.onError(`Could not load the ${inPage.label} chart module.`);
                 });
                 return;
             }

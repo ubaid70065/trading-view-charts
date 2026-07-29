@@ -5,34 +5,17 @@
  * its own key events and the embedding page never sees them, so anything typed
  * over a chart reaches TradingView's shortcuts instead. That is a property of
  * the embed, not something the page can work around.
+ *
+ * The bindings are listed in the layout menu's footnote — there is no separate
+ * shortcuts dialog.
  */
-
-/** Rendered in the Shortcuts dialog and bound below — one source of truth. */
-export const SHORTCUTS = [
-    { keys: ['Alt', '1'], description: 'Single chart' },
-    { keys: ['Alt', '2'], description: 'Two columns' },
-    { keys: ['Alt', '3'], description: 'Two rows' },
-    { keys: ['Alt', '4'], description: 'Three columns' },
-    { keys: ['Alt', '5'], description: 'Grid of four' },
-    { keys: ['Alt', 'L'], description: 'Open the layout picker' },
-    { keys: ['Alt', 'D'], description: 'Toggle dark / light theme' },
-    { keys: ['Alt', 'S'], description: 'Snapshot the workspace' },
-    { keys: ['Alt', 'M'], description: 'Maximise or restore the active pane' },
-    { keys: ['Alt', 'N'], description: 'New tab' },
-    { keys: ['Alt', 'W'], description: 'Close the current tab' },
-    { keys: ['Alt', '→'], description: 'Next pane' },
-    { keys: ['Alt', '←'], description: 'Previous pane' },
-    { keys: ['Alt', ','], description: 'Open settings' },
-    { keys: ['?'], description: 'Show this list' },
-    { keys: ['Esc'], description: 'Close a dialog or menu' },
-];
 
 /**
  * @param {object} actions Callbacks for each bound key.
  */
 export function bindShortcuts(actions) {
     window.addEventListener('keydown', (event) => {
-        // Never hijack typing in the settings dialog.
+        // Never hijack typing in the search box.
         const tag = event.target && event.target.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
@@ -41,9 +24,10 @@ export function bindShortcuts(actions) {
             return;
         }
 
-        if (event.key === '?' && !event.altKey && !event.ctrlKey) {
+        if (event.key === '/' && !event.altKey && !event.ctrlKey && !event.metaKey) {
+            // Without this the '/' lands in the box it just focused.
             event.preventDefault();
-            actions.onShortcuts();
+            actions.onSearch();
             return;
         }
 
@@ -72,22 +56,6 @@ export function bindShortcuts(actions) {
                 event.preventDefault();
                 actions.onTheme();
                 break;
-            case 'KeyS':
-                event.preventDefault();
-                actions.onSnapshot();
-                break;
-            case 'KeyM':
-                event.preventDefault();
-                actions.onMaximise();
-                break;
-            case 'KeyN':
-                event.preventDefault();
-                actions.onNewTab();
-                break;
-            case 'KeyW':
-                event.preventDefault();
-                actions.onCloseTab();
-                break;
             case 'ArrowRight':
                 event.preventDefault();
                 actions.onPane(1);
@@ -95,10 +63,6 @@ export function bindShortcuts(actions) {
             case 'ArrowLeft':
                 event.preventDefault();
                 actions.onPane(-1);
-                break;
-            case 'Comma':
-                event.preventDefault();
-                actions.onSettings();
                 break;
             default:
                 break;

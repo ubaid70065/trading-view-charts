@@ -3,11 +3,15 @@
  *
  * Consumers mutate through `update()` and re-render from the change event, so
  * persistence happens in exactly one place.
+ *
+ * The workspace is flat — one layout, one pane list. v1 stored an array of tabs;
+ * the tab strip is gone, so a v1 payload is lifted to the tab that was active.
  */
 
-import { createTab, defaultState, layoutPanes, normaliseLayoutId } from './config.js';
+import { createPanes, defaultState, layoutPanes, normaliseLayoutId } from './config.js';
 
-const KEY = 'tv:workspace:v1';
+const KEY = 'tv:workspace:v2';
+const LEGACY_KEY = 'tv:workspace:v1';
 
 let state = load();
 const listeners = new Set();
@@ -15,64 +19,75 @@ const listeners = new Set();
 function load() {
     try {
         const stored = JSON.parse(localStorage.getItem(KEY) || 'null');
-        if (!stored || stored.version !== 1) return defaultState();
-        return migrate(stored);
+        if (stored && stored.version === 2) return repair(stored);
+
+        const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY) || 'null');
+        if (legacy && legacy.version === 1) return repair(fromTabs(legacy));
+
+        return defaultState();
     } catch {
         return defaultState();
     }
 }
 
+/** Lifts the active tab of a v1 payload onto the flat workspace. */
+function fromTabs(stored) {
+    const tabs = Array.isArray(stored.tabs) ? stored.tabs : [];
+    const found = tabs.find((item) => item && item.id === stored.activeTabId) || tabs[0];
+    const tab = found && typeof found === 'object' ? found : {};
+    const { tabs: _tabs, activeTabId: _active, ...rest } = stored;
+    return {
+        ...rest,
+        version: 2,
+        layout: tab.layout,
+        panes: tab.panes,
+        activePane: tab.activePane,
+    };
+}
+
 /** Repairs anything missing so an older or hand-edited payload cannot break boot. */
-function migrate(stored) {
+function repair(stored) {
     const base = defaultState();
     const next = {
         ...base,
         ...stored,
+        version: 2,
         chart: { ...base.chart, ...(stored.chart || {}) },
         panel: { ...base.panel, ...(stored.panel || {}) },
         ticker: { ...base.ticker, ...(stored.ticker || {}) },
         sync: { ...base.sync, ...(stored.sync || {}) },
     };
 
-    if (!Array.isArray(next.tabs) || next.tabs.length === 0) {
-        next.tabs = base.tabs;
-    }
+    // Rewrites the pre-catalogue ids ('2h', '4', …) to catalogue ids.
+    next.layout = normaliseLayoutId(next.layout || 'r:1');
+    const count = layoutPanes(next.layout);
 
-    next.tabs = next.tabs.map((entry, index) => {
-        // A null or non-object entry must not take the rest down with it: this
-        // runs inside load()'s try, so one bad tab would otherwise discard every
-        // other tab, the watchlist and the ticker along with it.
-        const tab = entry && typeof entry === 'object' ? entry : {};
-        // Rewrites the pre-catalogue ids ('2h', '4', …) to catalogue ids.
-        const layout = normaliseLayoutId(tab.layout || 'r:1');
-        const count = layoutPanes(layout);
-        const panes = Array.isArray(tab.panes) ? tab.panes.slice(0, count) : [];
-        while (panes.length < count) {
-            panes.push({ symbol: 'NASDAQ:AAPL', interval: 'D', style: '1', source: 'tv' });
-        }
-        // A non-integer activePane would poison Math.min/max with NaN.
-        const active = Number(tab.activePane);
+    const panes = Array.isArray(next.panes) ? next.panes.slice(0, count) : [];
+    while (panes.length < count) panes.push(createPanes('r:1')[0]);
+    next.panes = panes.map((slot) => {
+        // A null or non-object pane must not take the workspace down with it:
+        // this runs inside load()'s try, so one bad entry would otherwise
+        // discard the layout, the watchlist and the ticker along with it.
+        const pane = slot && typeof slot === 'object' ? slot : {};
         return {
-            id: tab.id || `t${index + 1}`,
-            layout,
-            panes: panes.map((slot) => {
-                const pane = slot && typeof slot === 'object' ? slot : {};
-                return {
-                    symbol: pane.symbol || 'NASDAQ:AAPL',
-                    interval: pane.interval || 'D',
-                    style: pane.style || '1',
-                    // Panes saved before the NSE source existed default to the widget.
-                    source: pane.source === 'nse' ? 'nse' : 'tv',
-                };
-            }),
-            activePane: Number.isFinite(active) ? Math.min(Math.max(0, Math.trunc(active)), count - 1) : 0,
-            maximised: typeof tab.maximised === 'number' && tab.maximised < count ? tab.maximised : null,
+            symbol: pane.symbol || 'NASDAQ:AAPL',
+            interval: pane.interval || 'D',
+            style: pane.style || '1',
+            // Panes saved before a source existed default to the widget.
+            source: ['nse', 'tvfeed', 'advanced'].includes(pane.source) ? pane.source : 'tv',
         };
     });
 
-    if (!next.tabs.some((tab) => tab.id === next.activeTabId)) {
-        next.activeTabId = next.tabs[0].id;
-    }
+    // A non-integer activePane would poison Math.min/max with NaN.
+    const active = Number(next.activePane);
+    next.activePane = Number.isFinite(active)
+        ? Math.min(Math.max(0, Math.trunc(active)), count - 1)
+        : 0;
+    // Dropped with the maximise button. A workspace saved while a pane was
+    // maximised would otherwise still be showing that one pane, with nothing
+    // left in the UI to restore the layout.
+    delete next.maximised;
+
     if (!Array.isArray(next.panel.symbols)) next.panel.symbols = base.panel.symbols;
     if (!Array.isArray(next.ticker.symbols)) next.ticker.symbols = base.ticker.symbols;
     if (!Array.isArray(next.chart.studies)) next.chart.studies = [];
@@ -92,13 +107,8 @@ export function getState() {
     return state;
 }
 
-export function activeTab() {
-    return state.tabs.find((tab) => tab.id === state.activeTabId) || state.tabs[0];
-}
-
 export function activePane() {
-    const tab = activeTab();
-    return tab.panes[tab.activePane] || tab.panes[0];
+    return state.panes[state.activePane] || state.panes[0];
 }
 
 /**
@@ -118,19 +128,3 @@ export function subscribe(listener) {
     listeners.add(listener);
     return () => listeners.delete(listener);
 }
-
-export function reset() {
-    state = defaultState();
-    persist();
-    for (const listener of listeners) listener(state, { reason: 'panes' });
-}
-
-/** Returns the next unused tab id. */
-export function nextTabId() {
-    let n = state.tabs.length + 1;
-    const taken = new Set(state.tabs.map((tab) => tab.id));
-    while (taken.has(`t${n}`)) n += 1;
-    return `t${n}`;
-}
-
-export { createTab };

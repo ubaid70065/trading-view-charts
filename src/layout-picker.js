@@ -14,15 +14,9 @@ const SYNC_ITEMS = [
     {
         key: 'symbol',
         label: 'Symbol',
-        hint: 'Changing the symbol from Settings applies it to every pane. '
-            + 'Changes made inside a chart cannot be detected — the chart is a '
-            + 'cross-origin frame and reports nothing back.',
-    },
-    {
-        key: 'interval',
-        label: 'Interval',
-        hint: 'Changing the interval from Settings applies it to every pane. '
-            + 'Same limitation as Symbol.',
+        hint: 'A symbol from the header search goes to every pane. Changes made '
+            + 'inside a chart cannot be detected — the chart is a cross-origin '
+            + 'frame and reports nothing back.',
     },
 ];
 
@@ -109,18 +103,26 @@ export function createLayoutPicker(root, handlers) {
     const note = document.createElement('p');
     note.className = 'picker__note';
 
-    root.append(grid, syncSection, note);
+    // The only place the key bindings are written down, now that the shortcuts
+    // dialog is gone. Kept in step with shortcuts.js by hand — it is five lines.
+    const keys = document.createElement('p');
+    keys.className = 'picker__keys';
+    keys.innerHTML = '<kbd>/</kbd> search · <kbd>Alt</kbd><kbd>L</kbd> this menu · '
+        + '<kbd>Alt</kbd><kbd>D</kbd> theme · <kbd>Alt</kbd><kbd>←</kbd><kbd>→</kbd> pane · '
+        + '<kbd>Alt</kbd><kbd>1</kbd>–<kbd>5</kbd> layout';
+
+    root.append(grid, syncSection, note, keys);
 
     return {
         /** Marks the active layout and mirrors the stored sync flags. */
-        sync(state, tab) {
+        sync(state) {
             for (const [id, button] of buttons) {
-                button.classList.toggle('picker__option--active', id === tab.layout);
+                button.classList.toggle('picker__option--active', id === state.layout);
             }
             for (const [key, box] of syncBoxes) {
                 box.checked = Boolean(state.sync[key]);
             }
-            const panes = tab.panes.length;
+            const panes = state.panes.length;
             if (panes > HEAVY_LAYOUT_THRESHOLD) {
                 note.textContent = `${panes} panes means ${panes} separate chart frames — `
                     + 'expect noticeable memory and network use.';

@@ -10,12 +10,14 @@
  * real object with a real API.
  */
 
+import { NSE_INTERVALS, nearestNseInterval } from '../config.js';
 import { ApiError, candles as fetchCandles, quotes as fetchQuotes } from './api.js';
 
-const LIBRARY_SRC = '/vendor/lightweight-charts.standalone.production.js';
+// Both live in config.js so the pane grid can label and diff an NSE pane
+// without pulling this module — and the chart library — onto the boot path.
+export { NSE_INTERVALS, nearestNseInterval };
 
-/** Intervals Angel One's historical endpoint serves. */
-export const NSE_INTERVALS = ['1', '3', '5', '10', '15', '30', '60', 'D'];
+const LIBRARY_SRC = '/vendor/lightweight-charts.standalone.production.js';
 
 /** How far back to load by default, per interval. Minute data is capped upstream. */
 const LOOKBACK_DAYS = {
@@ -46,13 +48,6 @@ function loadLibrary() {
         document.head.append(script);
     });
     return libraryPromise;
-}
-
-/** Angel One serves only the intervals above; map anything else to the nearest. */
-export function nearestNseInterval(interval) {
-    if (NSE_INTERVALS.includes(interval)) return interval;
-    const fallback = { 120: '60', 240: '60', W: 'D', M: 'D' };
-    return fallback[interval] || 'D';
 }
 
 /**

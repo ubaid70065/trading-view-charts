@@ -27,6 +27,7 @@
  * SymbolInfo carries `timezone: 'Asia/Kolkata'` and the library localises.
  */
 
+import { periodArgs } from '../datafeed-compat.js';
 import { ApiError, quotes as fetchQuotes } from './api.js';
 
 /** Matches the server's SUPPORTED_RESOLUTIONS; Angel serves no W or M. */
@@ -162,8 +163,10 @@ export function createDatafeed({ base = '/udf', pollMs = POLL_MS } = {}) {
             }
         },
 
-        async getBars(symbolInfo, resolution, periodParams, onResult, onError) {
-            const { from, to, firstDataRequest } = periodParams;
+        // Arguments are taken positionally rather than named: which shape they
+        // arrive in depends on the library version. See datafeed-compat.js.
+        async getBars(symbolInfo, resolution) {
+            const { from, to, firstDataRequest, onResult, onError } = periodArgs(arguments);
             const params = new URLSearchParams({
                 symbol: symbolInfo.ticker || symbolInfo.name,
                 resolution: String(resolution),

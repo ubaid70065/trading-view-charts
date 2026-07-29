@@ -15,6 +15,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 import { hasCredentials, loadEnv } from './server/env.js';
@@ -54,11 +55,46 @@ function send(res, status, body, headers = {}) {
     res.end(body);
 }
 
+/** Worth compressing: text that gzips well. Images and wasm already do not. */
+const COMPRESSIBLE = /^(text\/|application\/(javascript|json|wasm$)|image\/svg)/;
+
+/** Below this, the gzip header costs more than the compression saves. */
+const COMPRESS_MIN_BYTES = 1024;
+
+/**
+ * Weak validator from the file's own metadata — no hashing, no read.
+ *
+ * Paired with `Cache-Control: no-cache`, which does *not* mean "do not cache":
+ * it means revalidate every time. So an edit is picked up on the next reload
+ * exactly as `no-store` gave us, but an unchanged 164 kB chart library comes
+ * back as an empty 304 instead of being sent again.
+ */
+const etagFor = (stats) => `W/"${stats.size.toString(16)}-${Math.floor(stats.mtimeMs).toString(16)}"`;
+
 /**
  * Never served, whatever the URL says: secrets, server-side code, and the
  * instrument cache (33 MB of it).
  */
 const PRIVATE_PATHS = [/^\.env/, /^server[\\/]/, /^data[\\/]/, /^node_modules[\\/]/];
+
+/**
+ * URL prefixes that do not match where the files sit.
+ *
+ * Advanced Charts resolves its own bundles relative to `library_path`, and
+ * every TradingView example — including the one the folder ships inside — uses
+ * `/charting_library/`. The folder itself lands in `public/` because that is
+ * what their React demo does, and this server has no notion of a web root. So
+ * the conventional URL is mapped rather than asking every caller to write
+ * `/public/` in front of a path the vendor's own docs spell without it.
+ */
+const ALIASES = [['charting_library/', 'public/charting_library/']];
+
+function aliased(relative) {
+    for (const [from, to] of ALIASES) {
+        if (relative.startsWith(from)) return to + relative.slice(from.length);
+    }
+    return relative;
+}
 
 const server = http.createServer(async (req, res) => {
     // WHATWG URL rather than the legacy url.parse; pathname stays
@@ -75,7 +111,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     const decoded = decodeURIComponent(url.pathname);
-    const relative = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '');
+    const relative = decoded === '/' ? 'index.html' : aliased(decoded.replace(/^\/+/, ''));
     const filePath = path.join(ROOT, relative);
 
     // Refuse anything that escapes the project directory.
@@ -97,12 +133,34 @@ const server = http.createServer(async (req, res) => {
         }
 
         const ext = path.extname(filePath).toLowerCase();
-        res.writeHead(200, {
-            'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
-            'Content-Length': stats.size,
-            // No caching in development so library and app edits show up at once.
-            'Cache-Control': 'no-store',
-        });
+        const type = MIME_TYPES[ext] || 'application/octet-stream';
+        const etag = etagFor(stats);
+
+        const headers = {
+            'Content-Type': type,
+            'Cache-Control': 'no-cache',
+            ETag: etag,
+            Vary: 'Accept-Encoding',
+        };
+
+        // Unchanged since the browser last asked: send the headers, not the file.
+        if (req.headers['if-none-match'] === etag) {
+            res.writeHead(304, headers);
+            res.end();
+            return;
+        }
+
+        const accepts = String(req.headers['accept-encoding'] || '').includes('gzip');
+        const worthIt = COMPRESSIBLE.test(type) && stats.size >= COMPRESS_MIN_BYTES;
+
+        if (accepts && worthIt) {
+            // Content-Length would describe the file, not the gzip stream.
+            res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip' });
+            fs.createReadStream(filePath).pipe(zlib.createGzip()).pipe(res);
+            return;
+        }
+
+        res.writeHead(200, { ...headers, 'Content-Length': stats.size });
         fs.createReadStream(filePath).pipe(res);
     });
 });

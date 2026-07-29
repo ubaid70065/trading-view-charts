@@ -1,6 +1,5 @@
 /**
- * Top header: connection status, layout picker, theme toggle, snapshot and the
- * dialog triggers.
+ * Top header: connection status, layout picker and the theme toggle.
  */
 
 import { layoutById, layoutIconSvg } from './config.js';
@@ -11,9 +10,6 @@ import { createLayoutPicker } from './layout-picker.js';
  * @param {(layout: string) => void} handlers.onLayout
  * @param {(key: string, value: boolean) => void} handlers.onSync
  * @param {() => void} handlers.onTheme
- * @param {() => void} handlers.onSnapshot
- * @param {() => void} handlers.onShortcuts
- * @param {() => void} handlers.onSettings
  */
 export function mountHeader(handlers) {
     const layoutBtn = document.getElementById('layoutBtn');
@@ -49,21 +45,18 @@ export function mountHeader(handlers) {
     });
 
     themeBtn.addEventListener('click', handlers.onTheme);
-    document.getElementById('snapshotBtn').addEventListener('click', handlers.onSnapshot);
-    document.getElementById('shortcutsBtn').addEventListener('click', handlers.onShortcuts);
-    document.getElementById('settingsBtn').addEventListener('click', handlers.onSettings);
 
     return {
         /** Reflects theme and the active layout in the header. */
-        sync(state, tab) {
+        sync(state) {
             const light = state.theme === 'light';
             themeBtn.querySelector('.btn__icon').textContent = light ? '☀' : '☾';
             themeBtn.querySelector('.btn__text').textContent = light ? 'Light' : 'Dark';
 
             // The button wears the current arrangement, as TradingView's does.
-            layoutBtn.querySelector('.btn__icon').innerHTML = layoutIconSvg(layoutById(tab.layout), 15);
+            layoutBtn.querySelector('.btn__icon').innerHTML = layoutIconSvg(layoutById(state.layout), 15);
 
-            picker.sync(state, tab);
+            picker.sync(state);
         },
         closeMenu,
     };

@@ -6,8 +6,8 @@ A multi-chart trading workspace with **two data sources per pane**:
   free and with no signup.
 - **NSE via Angel One** — *your* SmartAPI feed, drawn in-page with Lightweight Charts.
 
-Plus a ticker tape, a 55-layout picker (1–16 panes), watchlist and symbol details, layout
-tabs, and Settings / Shortcuts / Snapshot from the header.
+One master symbol search drives every pane at once. Plus a ticker tape, a 55-layout picker
+(1–16 panes), and a watchlist — and nothing else in the chrome, by design.
 
 ## Run
 
@@ -30,22 +30,35 @@ A pane that finds no API says so directly rather than reporting a bare HTTP 404.
 
 | Feature | Notes |
 | --- | --- |
-| **Ticker tape** | Quote strip across the top. Symbols and labels are editable in Settings. |
-| **Layouts** | Single, two columns, two rows, three, or a grid of four. Each pane is an independent chart. |
-| **Panes** | Per-pane symbol, interval and style. Click a header to select; ⤢ maximises. |
-| **Watchlist + details** | Attaches to the last pane — the only one with room. Toggle in Settings. |
-| **Tabs** | Each tab is a saved workspace with its own layout and symbols. `+` adds, `×` closes. |
+| **Master search** | One box in the header drives the layout. Type a symbol, press Enter, every pane follows. `/` jumps to it; the pill beside it switches between *All charts* and *Active chart*. |
+| **Layouts** | 55 arrangements, 1–16 panes, from the Layout menu. Each pane is an independent chart. |
+| **Panes** | Click one to make it active. Interval, style and drawings come from the chart's own toolbar. |
+| **Ticker tape** | Quote strip across the top, loaded once the browser is idle so it does not slow the charts. |
+| **Watchlist + details** | Attaches to the last pane — the only one with room. |
 | **Theme** | Dark / light across page chrome, charts and ticker tape. |
-| **Snapshot** | Saves a PNG of the whole workspace. |
-| **Shortcuts** | Workspace keybindings, listed in the dialog. |
 | **Status pill** | `detecting…` until the first chart loads, then `live`; tracks offline events. |
 
-Everything persists to localStorage. **Settings → Reset everything** restores defaults.
+Everything persists to localStorage. The keys are listed at the foot of the Layout menu.
+
+There is no settings dialog, no tab strip, no snapshot button: the header is the search box,
+the Layout menu and the theme toggle. Per-chart controls — interval, indicators, drawings,
+symbol search — live in each chart's own toolbar, which is where the widget puts them
+anyway. To start over, clear `tv:workspace:v2` from the browser's local storage.
 
 ## NSE data (Angel One SmartAPI)
 
-Set a pane's **Data source** to *NSE — Angel One* in Settings and it renders your feed
-instead of TradingView's.
+A pane whose `source` is `nse` renders your feed instead of TradingView's, drawn in-page
+with Lightweight Charts.
+
+> **No UI reaches this any more.** The settings dialog was the only place to switch a pane's
+> data source, so with it gone the source can only be set by editing `tv:workspace:v2` in
+> local storage. The code path is intact and still tested — and `src/nse/` now loads on
+> demand, so it costs a workspace of widget panes nothing. Ask if you want a per-pane source
+> toggle back in the pane header; it is a small addition.
+>
+> For everyday Indian charting this matters less than it sounds: `NSE:RELIANCE` on the
+> TradingView source is real-time on the free widget *and* keeps indicators and drawings.
+> The Angel One source earns its place when you specifically want your own feed.
 
 ### Why it needs a server
 
@@ -160,6 +173,59 @@ NSE, which is what the charts use, is unaffected.
 - Times are shifted by +05:30 before rendering, because Lightweight Charts draws in UTC
   and has no time-zone option — without it the 09:15 open would be labelled 03:45.
 
+## TradingView feed source (`/tv`)
+
+A third pane source, picked from the dropdown in any pane's header. It reads TradingView's
+own widget data socket — the one every free embed already uses — but from this server, so
+the bars land on a Lightweight Charts canvas the page owns instead of inside an iframe it
+cannot touch.
+
+The point is the combination the other two sources cannot offer: every exchange TradingView
+carries *and* a real chart object. No credentials, no signup.
+
+|  | `tv` (embed) | `nse` (Angel One) | `tvfeed` |
+| --- | --- | --- | --- |
+| Symbols | all TradingView | NSE only | all TradingView |
+| Credentials | none | SmartAPI | none |
+| Live updates | streamed | polled, 5s | streamed |
+| Indicators, drawings | yes | no | no |
+| Page can read the chart | no | yes | yes |
+
+```
+browser ──/tv/history──▶ server ──wss──▶ widgetdata.tradingview.com
+        ◀─/tv/stream───         (one socket, shared by every pane)
+```
+
+- [server/ws.js](server/ws.js) — RFC 6455 client. Node 22+ has a global `WebSocket`, but the
+  spec forbids setting `Origin` from script and TradingView rejects any handshake without a
+  recognised one, so the request line has to be ours. No dependency added.
+- [server/tvfeed.js](server/tvfeed.js) — the `~m~`-framed protocol: sessions, symbol
+  resolution, history, live bars.
+- [server/tv-routes.js](server/tv-routes.js) — same UDF envelope `server/udf.js` serves.
+  History is REST; live bars are Server-Sent Events, because this side only ever pushes.
+- [src/tv/datafeed.js](src/tv/datafeed.js) — a Datafeed API object for Advanced Charts,
+  the sibling of `src/nse/datafeed.js`.
+- [src/tv/chart.js](src/tv/chart.js) — the pane, drawn with Lightweight Charts.
+
+### Limits of this source
+
+- **The protocol is undocumented and unversioned.** It is reconstructed from the widget
+  bundle, and TradingView owes it no stability — a rename ships whenever they deploy, and
+  nothing announces it. A pane that suddenly draws nothing usually means that, not a bug.
+- **Their terms cover the widgets as embedded**, not a private client, and the exchange data
+  underneath is licensed to them. This is for local use — do not put it behind a public URL
+  or redistribute what it returns. Where Angel One has the symbol, it is the licensed path.
+- **Symbols must be exchange-qualified** — `NSE:RELIANCE`, not `RELIANCE`. Switching a pane
+  between sources rewrites the symbol both ways; where it cannot (a NASDAQ listing moving to
+  Angel One) the pane keeps its symbol and says so.
+- **No indicators or drawing tools** — same trade as the Angel One pane, for the same
+  reason: Lightweight Charts is a renderer, not the TradingView UI.
+- **History is paged from now backwards.** The protocol takes a bar *count*, not a range, so
+  a window far in the past costs the whole span up to today and is capped at 5000 bars.
+- `widgetdata.tradingview.com` is a large rotating pool and how much of it is reachable
+  depends on your network. The client re-resolves on each attempt and remembers the node
+  that last worked, which is what keeps a first connection from failing outright.
+
 ## Indian symbols on the TradingView source
 
 **NSE is fully supported and real-time**, free, with no signup. Per TradingView's own
@@ -180,16 +246,50 @@ see it and there is nothing useful to click.
 and for a dual-listed Indian company it commonly picks BSE — so `RELIANCE` at 3m gives a
 dead chart while `NSE:RELIANCE` gives a real-time one.
 
-Settings catches the combination before the pane is built and offers both escapes,
-`NSE:<ticker>` first: it keeps real-time data *and* the indicators and drawing tools, which
-moving to the Angel One source gives up. Rules are in `widgetIntradayProblem()` in
-[src/config.js](src/config.js), covered by `test/widget-limits.test.mjs`.
+Searching such a symbol raises the warning banner and names the fix, `NSE:<ticker>`: it
+keeps real-time data *and* the indicators and drawing tools, which moving to the Angel One
+source gives up. Rules are in `widgetIntradayProblem()` in [src/config.js](src/config.js),
+covered by `test/widget-limits.test.mjs`.
 
 ### So when is the Angel One source worth using?
 
 When you want the data to be *yours*: no dependence on TradingView's entitlements, bars
 straight from your SmartAPI subscription, and a chart object the page can actually drive.
 For everyday charting with indicators and drawings, `NSE:` on the widget is the better pane.
+
+## Load time
+
+First load went from **114 kB across 16 files to 26 kB across 11**, and a repeat load now
+fetches **no application code at all**. Five things get it there, in rough order of payoff:
+
+**gzip on the static server.** `server.js` compresses text responses above 1 kB. CSS goes
+13.3 kB → 3.4 kB; the Lightweight Charts bundle 164 kB → 51 kB.
+
+**Conditional requests instead of `no-store`.** The server sends a weak `ETag` built from the
+file's size and mtime — no hashing, no extra read — with `Cache-Control: no-cache`, which
+means *revalidate*, not *do not cache*. Edits still appear on the next reload, exactly as
+`no-store` gave us, but unchanged files come back as an empty `304`.
+
+**`nse/` is imported on demand.** [src/panes.js](src/panes.js) reaches it through a dynamic
+`import()`, so a workspace of widget panes never pays for the NSE client or the chart
+library. `nearestNseInterval()` moved to config.js because the grid needs it synchronously
+to label and diff a pane; that one function was the whole reason the module was eager.
+
+**`preconnect` and `modulepreload` in the head.** ES modules are discovered a level at a
+time — without the hints, the browser learns about `panes.js` only after `main.js` parses,
+and about `widget.js` only after that. The preconnects overlap DNS and TLS for
+`s3.tradingview.com` and `tradingview-widget.com` with parsing the document.
+
+**The ticker tape waits for idle.** It is decoration that costs a second vendor script and a
+second iframe, competing with the charts for the connection pool. `requestIdleCallback`
+holds it until the browser has nothing better to do.
+
+Removing the settings dialog, tab strip and snapshot module took ~26 kB of JS and ~4.5 kB of
+CSS with them, which is a real part of the drop but not most of it.
+
+What is *not* optimised is the dominant cost on a wide layout: each pane is a full
+TradingView application in its own frame. Sixteen panes will be slow no matter what this
+repo does — hence the warning above eight.
 
 ## Three constraints the embed imposes
 
@@ -199,9 +299,15 @@ extend it.
 **1. No API on a loaded chart.** The iframe is cross-origin, so there is no way to set a
 symbol, theme or interval after load. Every change re-embeds, which reloads that chart.
 Panes are therefore diffed by a settings signature — changing one pane's symbol re-embeds
-only that pane, while switching layout or tab rebuilds the grid. Each re-embed also re-runs
+only that pane, while switching layout rebuilds the grid. Each re-embed also re-runs
 the vendor script, which registers `window` listeners it offers no way to remove, so avoid
 driving a re-embed from anything high-frequency.
+
+This is why the master search sets state and lets the diff re-embed, rather than reaching
+into the widget. There is no `widget.setSymbol()` or `widget.reload()` on the free embed —
+those belong to the paid Charting Library, which is same-origin and self-hosted. It is also
+one-directional: a symbol changed *inside* a chart is never reported back, so the search box
+shows the last symbol the app set, not necessarily what the chart is displaying.
 
 **2. Keyboard and mouse events inside a chart never reach the page.** Workspace shortcuts
 fire only while focus is outside a chart; over a chart, keys go to TradingView's own
@@ -209,9 +315,9 @@ shortcuts. Clicks are the same, which is why pane selection also watches for foc
 to an iframe (`window.blur` + `document.activeElement`) rather than relying on a click
 handler that can never fire.
 
-**3. Charts cannot be drawn to a canvas.** Snapshot uses the Screen Capture API, so the
-browser asks which surface to share — pick this tab. For a single chart with no prompt,
-use the camera button in that chart's own toolbar.
+**3. Charts cannot be drawn to a canvas.** Nothing on the page can screenshot a chart —
+`html2canvas` and friends see an empty box where the iframe is. Use the camera button in the
+chart's own toolbar, which runs inside the frame and can.
 
 ## Accepted settings
 
@@ -251,16 +357,14 @@ server/           Never served to the browser (403)
 src/
   main.js         Wiring, actions, render loop
   config.js       Vendor whitelists, layout catalogue, defaults, timezones
+  search.js       Master symbol search and its scope switch
   state.js        Workspace state, persistence, corrupt-payload repair
   widget.js       Embed mechanics for chart and ticker, attribution element
   panes.js        Pane grid, signature diffing, source selection
-  layout-picker.js  55-layout menu with generated icons, sync switches
-  header.js       Header buttons, layout menu, status pill
-  tabs.js         Tab strip
-  dialogs.js      Settings and Shortcuts dialogs
-  shortcuts.js    Key bindings (single source of truth with the dialog)
-  snapshot.js     Screen Capture → PNG
-  nse/
+  layout-picker.js  55-layout menu with generated icons, sync switch, key hints
+  header.js       Layout menu, theme toggle, status pill
+  shortcuts.js    Key bindings
+  nse/            Loaded on demand — only when a pane is set to the NSE source
     api.js        Client for /api/*
     chart.js      Lightweight Charts pane, IST handling, live polling
     datafeed.js   TradingView Datafeed API over /udf/*
@@ -273,7 +377,7 @@ data/             Cached instrument master (gitignored)
 ## Licence
 
 The **embed widgets** are free to use, including commercially, as long as the TradingView
-attribution stays visible. It sits in the footer next to the tabs and links to the active
+attribution stays visible. It sits in the footer and links to the active
 symbol; the ticker tape carries TradingView's own logo. Do not remove either.
 
 **Lightweight Charts** is Apache-2.0 and vendored into `vendor/` with its licence, so it is

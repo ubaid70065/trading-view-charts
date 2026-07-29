@@ -286,6 +286,21 @@ export function intervalLabel(value) {
     return found ? found.label : value;
 }
 
+/**
+ * Intervals Angel One's historical endpoint serves.
+ *
+ * Here rather than in nse/chart.js because the pane grid needs to label and diff
+ * an NSE pane without loading that module — it is imported on demand.
+ */
+export const NSE_INTERVALS = ['1', '3', '5', '10', '15', '30', '60', 'D'];
+
+/** Angel One serves only the intervals above; map anything else to the nearest. */
+export function nearestNseInterval(interval) {
+    if (NSE_INTERVALS.includes(interval)) return interval;
+    const fallback = { 120: '60', 240: '60', W: 'D', M: 'D' };
+    return fallback[interval] || 'D';
+}
+
 /** Intervals every TradingView symbol can serve; the rest are intraday. */
 const CONTINUOUS_INTERVALS = ['D', 'W', 'M'];
 
@@ -393,15 +408,24 @@ export const LOCALES = [
     'ms_MY', 'nl_NL', 'pl', 'pt', 'ru', 'sv', 'th', 'tr', 'vi', 'zh_CN', 'zh_TW',
 ];
 
-/** Shipped defaults. Everything here is user-editable and persisted. */
+/**
+ * Shipped defaults. Everything here is persisted.
+ *
+ * One flat workspace: the header search, the layout picker and the theme toggle
+ * are the whole surface, so there is no tab list and nothing here is nested
+ * behind one.
+ */
 export function defaultState() {
     return {
-        version: 1,
+        version: 2,
         theme: 'dark',
-        activeTabId: 't1',
-        // Propagate a symbol or interval change to every pane in the layout.
-        sync: { symbol: false, interval: false },
-        tabs: [createTab('t1', 'NASDAQ:AAPL', 'D', 'c:1-1')],
+        // Propagate a symbol change to every pane in the layout. Symbol sync
+        // ships on: it is what makes the header search a master control rather
+        // than an edit box for whichever pane was clicked last.
+        sync: { symbol: true, interval: false },
+        layout: 'c:1-1',
+        panes: createPanes('c:1-1', 'NASDAQ:AAPL', 'D'),
+        activePane: 0,
         chart: {
             locale: 'en',
             timezone: detectTimezone(),
@@ -437,24 +461,67 @@ export function defaultState() {
 /**
  * Where a pane gets its data.
  *
- *  'tv'  — TradingView's embed widget. Their data, their full UI.
- *  'nse' — Angel One via this app's /api routes, drawn with Lightweight Charts.
- *          The only source that can show your own feed.
+ *  'tv'     — TradingView's embed widget. Their data, their full UI.
+ *  'nse'    — Angel One via this app's /api routes, drawn with Lightweight
+ *             Charts. The only source that can show your own feed.
+ *  'tvfeed' — TradingView's widget socket via this app's /tv routes, drawn with
+ *             Lightweight Charts. Every exchange the embed carries, but on a
+ *             canvas this app owns — so panes can be linked, themed and read.
+ *             Undocumented upstream; see server/tvfeed.js.
+ *  'advanced' — the Advanced Charts library over the same /tv routes. The full
+ *             TradingView UI, in-page and driveable. Needs the licensed library
+ *             to be installed; the pane says so when it is not.
  */
 export const PANE_SOURCES = [
     { value: 'tv', label: 'TradingView widget' },
     { value: 'nse', label: 'NSE — Angel One' },
+    { value: 'tvfeed', label: 'TradingView feed' },
+    { value: 'advanced', label: 'Advanced Charts' },
 ];
 
-export function createTab(id, symbol = 'NASDAQ:AAPL', interval = 'D', layout = 'r:1') {
+/**
+ * The form a typed symbol has to take for one pane's data source.
+ *
+ * The widget wants EXCHANGE:TICKER and Angel One wants a bare NSE ticker, so the
+ * master search cannot hand the same string to both. Angel One also serves NSE
+ * listings only, and a symbol from any other venue has no equivalent there.
+ *
+ * @param {{source?: string}} pane
+ * @param {string} typed
+ * @returns {string|null} null when this pane cannot show the symbol at all.
+ */
+export function symbolForPane(pane, typed) {
+    const symbol = String(typed || '').trim().toUpperCase();
+    if (!symbol) return null;
+    if (pane.source !== 'nse') return symbol;
+
+    const colon = symbol.indexOf(':');
+    if (colon === -1) return symbol;
+    return symbol.slice(0, colon) === 'NSE' ? symbol.slice(colon + 1) : null;
+}
+
+export function createPanes(layout, symbol = 'NASDAQ:AAPL', interval = 'D') {
     const count = layoutPanes(layout);
-    return {
-        id,
-        layout: normaliseLayoutId(layout),
-        activePane: 0,
-        maximised: null,
-        panes: Array.from({ length: count }, () => ({ symbol, interval, style: '1', source: 'tv' })),
-    };
+    return Array.from({ length: count }, () => ({ symbol, interval, style: '1', source: 'tv' }));
+}
+
+/**
+ * Grows or shrinks the pane list to match a new layout.
+ *
+ * @param {object} workspace The state draft — panes live directly on it.
+ * @param {string} layout    Catalogue id.
+ */
+export function setLayout(workspace, layout) {
+    const id = normaliseLayoutId(layout);
+    const count = layoutPanes(id);
+    // New panes inherit the active pane so a split does not blank the screen.
+    const template = workspace.panes[workspace.activePane] || workspace.panes[0];
+    while (workspace.panes.length < count) {
+        workspace.panes.push({ ...template });
+    }
+    workspace.panes.length = count;
+    workspace.layout = id;
+    workspace.activePane = Math.min(workspace.activePane, count - 1);
 }
 
 /** Filters an object down to keys the target widget actually accepts. */

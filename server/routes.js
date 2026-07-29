@@ -14,6 +14,7 @@ import { hasCredentials } from './env.js';
 import * as angel from './angel.js';
 import * as instruments from './instruments.js';
 import { handleUdf } from './udf.js';
+import { handleTv } from './tv-routes.js';
 
 const MAX_QUOTE_SYMBOLS = 50;
 
@@ -58,6 +59,10 @@ export async function handleApi(req, res, url, root) {
     // The datafeed speaks a different dialect — its own envelope and its own
     // error convention — so it gets its own module rather than more cases here.
     if (await handleUdf(req, res, url, root)) return true;
+
+    // Same envelope again, different feed: /udf is the Angel One subscription,
+    // /tv is TradingView's widget socket. Neither needs the other.
+    if (await handleTv(req, res, url)) return true;
 
     if (!url.pathname.startsWith('/api/')) return false;
 

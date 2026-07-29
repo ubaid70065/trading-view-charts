@@ -126,7 +126,7 @@ test('ticker widget whitelist matches the shipped script', async (t) => {
 
 test('emitted settings only use accepted keys', () => {
     const state = cfg.defaultState();
-    const pane = state.tabs[0].panes[0];
+    const pane = state.panes[0];
 
     for (const withPanel of [true, false]) {
         const settings = cfg.chartSettings(state, pane, withPanel);
@@ -147,7 +147,7 @@ test('booleans that are meaningful when false are not dropped', () => {
     const state = cfg.defaultState();
     state.chart.hide_volume = false;
     state.chart.withdateranges = false;
-    const settings = cfg.chartSettings(state, state.tabs[0].panes[0], true);
+    const settings = cfg.chartSettings(state, state.panes[0], true);
     assert.equal(settings.hide_volume, false);
     assert.equal(settings.withdateranges, false);
 });
@@ -216,17 +216,40 @@ test('layout ids from the previous build still resolve', () => {
     assert.equal(cfg.layoutById('nonsense').id, 'r:1');
 });
 
+test('the master search reshapes a symbol per data source', () => {
+    const tv = { source: 'tv' };
+    const nse = { source: 'nse' };
+
+    assert.equal(cfg.symbolForPane(tv, 'nasdaq:aapl'), 'NASDAQ:AAPL');
+    assert.equal(cfg.symbolForPane(tv, '  aapl  '), 'AAPL');
+    // Angel One takes a bare ticker, so an NSE prefix has to come off.
+    assert.equal(cfg.symbolForPane(nse, 'NSE:RELIANCE'), 'RELIANCE');
+    assert.equal(cfg.symbolForPane(nse, 'reliance'), 'RELIANCE');
+    // ...and it has no listing at all for another venue, so the pane keeps
+    // whatever it was showing rather than going blank.
+    assert.equal(cfg.symbolForPane(nse, 'NASDAQ:AAPL'), null);
+    assert.equal(cfg.symbolForPane(nse, 'BSE:TCS'), null);
+    assert.equal(cfg.symbolForPane(tv, '   '), null);
+    // A pane saved before the NSE source existed carries no source field.
+    assert.equal(cfg.symbolForPane({}, 'NSE:INFY'), 'NSE:INFY');
+});
+
+test('symbol sync ships on so the header search drives every pane', () => {
+    assert.equal(cfg.defaultState().sync.symbol, true);
+});
+
 test('time zones are normalised to the set the widget accepts', () => {
     assert.ok(cfg.TIMEZONES.includes(cfg.detectTimezone()));
 });
 
 test('state repairs a corrupt or truncated payload', async () => {
     store.clear();
-    store.set('tv:workspace:v1', JSON.stringify({
-        version: 1,
-        activeTabId: 'missing',
+    store.set('tv:workspace:v2', JSON.stringify({
+        version: 2,
         // Legacy layout id, too few panes, and junk fields.
-        tabs: [{ id: 'a', layout: '4', panes: [{ symbol: 'NASDAQ:AAPL' }], activePane: 99 }],
+        layout: '4',
+        panes: [{ symbol: 'NASDAQ:AAPL' }],
+        activePane: 99,
         chart: null,
         panel: { symbols: 'not-an-array' },
     }));
@@ -234,46 +257,93 @@ test('state repairs a corrupt or truncated payload', async () => {
     const state = await import(moduleUrl('state.js') + '?fresh=1');
     const loaded = state.getState();
 
-    assert.equal(loaded.tabs[0].layout, 'r:2-2', 'legacy id migrated');
-    assert.equal(loaded.tabs[0].panes.length, 4, 'pane list padded to the layout');
-    assert.equal(loaded.tabs[0].activePane, 3, 'out-of-range active pane clamped');
-    assert.equal(loaded.activeTabId, 'a', 'dangling active tab repaired');
+    assert.equal(loaded.layout, 'r:2-2', 'legacy id migrated');
+    assert.equal(loaded.panes.length, 4, 'pane list padded to the layout');
+    assert.equal(loaded.activePane, 3, 'out-of-range active pane clamped');
     assert.ok(Array.isArray(loaded.panel.symbols), 'watchlist coerced to an array');
     // Panes saved before the NSE source existed must default to the widget.
-    assert.ok(loaded.tabs[0].panes.every((pane) => pane.source === 'tv'), 'pane source defaulted');
+    assert.ok(loaded.panes.every((pane) => pane.source === 'tv'), 'pane source defaulted');
     assert.ok(loaded.chart && typeof loaded.chart.timezone === 'string', 'chart defaults restored');
     assert.ok(loaded.sync && typeof loaded.sync.symbol === 'boolean', 'sync defaults added');
 });
 
-test('one broken tab does not discard the whole workspace', async () => {
+test('one broken pane does not discard the whole workspace', async () => {
     store.clear();
-    store.set('tv:workspace:v1', JSON.stringify({
-        version: 1,
-        activeTabId: 'good',
-        // A null tab, a null pane and a non-numeric activePane. migrate() runs
-        // inside load()'s try, so any throw here silently resets everything.
-        tabs: [
-            null,
-            { id: 'good', layout: 'c:1-1', panes: [null, { symbol: 'NSE:RELIANCE' }], activePane: 'x' },
-        ],
+    store.set('tv:workspace:v2', JSON.stringify({
+        version: 2,
+        layout: 'c:1-1',
+        // A null pane and a non-numeric activePane. repair() runs inside load()'s
+        // try, so any throw here silently resets everything.
+        panes: [null, { symbol: 'NSE:RELIANCE' }],
+        activePane: 'x',
         panel: { symbols: ['NSE:TCS'] },
     }));
 
     const state = await import(moduleUrl('state.js') + '?fresh=3');
     const loaded = state.getState();
 
-    assert.equal(loaded.tabs.length, 2, 'the good tab survived the broken one');
-    const good = loaded.tabs.find((tab) => tab.id === 'good');
-    assert.ok(good, 'the named tab was kept');
-    assert.equal(good.panes[1].symbol, 'NSE:RELIANCE', 'the real symbol was not lost');
-    assert.equal(good.panes[0].symbol, 'NASDAQ:AAPL', 'the null pane was replaced, not fatal');
-    assert.equal(good.activePane, 0, 'a non-numeric activePane clamps to 0 rather than NaN');
+    assert.equal(loaded.panes[1].symbol, 'NSE:RELIANCE', 'the real symbol was not lost');
+    assert.equal(loaded.panes[0].symbol, 'NASDAQ:AAPL', 'the null pane was replaced, not fatal');
+    assert.equal(loaded.activePane, 0, 'a non-numeric activePane clamps to 0 rather than NaN');
     assert.deepEqual(loaded.panel.symbols, ['NSE:TCS'], 'the watchlist was not reset');
+});
+
+test('a workspace saved while maximised comes back whole', async () => {
+    store.clear();
+    // Saved by the build that had a maximise button, with pane 2 filling the
+    // grid. Nothing in the UI can un-maximise it any more, so the stored flag
+    // has to be dropped on load or the user is stuck on one chart for good.
+    store.set('tv:workspace:v2', JSON.stringify({
+        version: 2,
+        layout: 'r:2-2',
+        panes: [{ symbol: 'A' }, { symbol: 'B' }, { symbol: 'C' }, { symbol: 'D' }],
+        activePane: 2,
+        maximised: 2,
+    }));
+
+    const state = await import(moduleUrl('state.js') + '?fresh=5');
+    const loaded = state.getState();
+
+    assert.equal(loaded.panes.length, 4, 'the whole layout is back');
+    assert.ok(!('maximised' in loaded), 'the flag is gone, not merely ignored');
+    assert.equal(loaded.activePane, 2, 'the active pane is untouched');
+});
+
+test('a tabbed v1 workspace is lifted onto the flat one', async () => {
+    store.clear();
+    // Saved by the build that had a tab strip. The tab the user left open is
+    // the one worth keeping — the others have nowhere to go.
+    store.set('tv:workspace:v1', JSON.stringify({
+        version: 1,
+        theme: 'light',
+        activeTabId: 't2',
+        tabs: [
+            { id: 't1', layout: 'r:1', panes: [{ symbol: 'NASDAQ:MSFT' }], activePane: 0 },
+            {
+                id: 't2',
+                layout: 'c:1-1',
+                panes: [{ symbol: 'NSE:RELIANCE' }, { symbol: 'NSE:INFY' }],
+                activePane: 1,
+            },
+        ],
+        panel: { symbols: ['NSE:TCS'] },
+    }));
+
+    const state = await import(moduleUrl('state.js') + '?fresh=4');
+    const loaded = state.getState();
+
+    assert.equal(loaded.version, 2, 'payload upgraded');
+    assert.equal(loaded.layout, 'c:1-1', 'the active tab supplied the layout');
+    assert.deepEqual(loaded.panes.map((pane) => pane.symbol), ['NSE:RELIANCE', 'NSE:INFY']);
+    assert.equal(loaded.activePane, 1, 'the active pane came across');
+    assert.equal(loaded.theme, 'light', 'settings outside the tabs survived');
+    assert.deepEqual(loaded.panel.symbols, ['NSE:TCS'], 'so did the watchlist');
+    assert.ok(!('tabs' in loaded), 'the tab list is gone');
 });
 
 test('unreadable storage falls back to defaults instead of throwing', async () => {
     store.clear();
-    store.set('tv:workspace:v1', '{ this is not json');
+    store.set('tv:workspace:v2', '{ this is not json');
     const state = await import(moduleUrl('state.js') + '?fresh=2');
-    assert.equal(state.getState().tabs.length, 1);
+    assert.equal(state.getState().panes.length, 2);
 });

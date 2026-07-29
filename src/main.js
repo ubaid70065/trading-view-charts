@@ -6,19 +6,19 @@
  * the pane grid's embed diffing entirely.
  */
 
-import { HEAVY_LAYOUT_THRESHOLD, layoutPanes, tickerSettings } from './config.js';
-import { createSettingsDialog, createShortcutsDialog, setLayout } from './dialogs.js';
+import {
+    HEAVY_LAYOUT_THRESHOLD, layoutPanes, setLayout, symbolForPane, tickerSettings,
+    widgetIntradayProblem,
+} from './config.js';
 import { createStatus, mountHeader } from './header.js';
 import { createPaneGrid } from './panes.js';
-import { captureWorkspace } from './snapshot.js';
-import { SHORTCUTS, bindShortcuts } from './shortcuts.js';
-import { activeTab, createTab, getState, nextTabId, reset, subscribe, update } from './state.js';
-import { createTabStrip } from './tabs.js';
+import { mountSearch } from './search.js';
+import { bindShortcuts } from './shortcuts.js';
+import { getState, subscribe, update } from './state.js';
 import { attributionElement, embedTicker } from './widget.js';
 
 const tickerHost = document.getElementById('tickerHost');
 const panesHost = document.getElementById('panesHost');
-const tabsHost = document.getElementById('tabsHost');
 const attributionHost = document.getElementById('attributionHost');
 const banner = document.getElementById('banner');
 
@@ -41,75 +41,76 @@ function notify(message, { sticky = false } = {}) {
 
 const paneGrid = createPaneGrid(panesHost, {
     onActivate(index) {
-        const tab = activeTab();
-        if (tab.activePane === index) return;
-        update((draft) => {
-            const target = draft.tabs.find((item) => item.id === draft.activeTabId);
-            target.activePane = index;
-        }, { reason: 'chrome' });
-    },
-    onToggleMaximise(index) {
-        update((draft) => {
-            const target = draft.tabs.find((item) => item.id === draft.activeTabId);
-            target.maximised = target.maximised === index ? null : index;
-            target.activePane = index;
-        }, { reason: 'panes' });
+        if (getState().activePane === index) return;
+        update((draft) => { draft.activePane = index; }, { reason: 'chrome' });
     },
     onError: (message) => notify(message, { sticky: true }),
 });
 
-const tabStrip = createTabStrip(tabsHost, {
-    onSelect(id) {
-        if (getState().activeTabId === id) return;
-        update((draft) => { draft.activeTabId = id; }, { reason: 'panes' });
-    },
-    onAdd() {
-        update((draft) => {
-            const current = draft.tabs.find((item) => item.id === draft.activeTabId);
-            const pane = current.panes[current.activePane] || current.panes[0];
-            const id = nextTabId();
-            draft.tabs.push(createTab(id, pane.symbol, pane.interval, '1'));
-            draft.activeTabId = id;
-        }, { reason: 'panes' });
-    },
-    onClose(id) {
-        update((draft) => {
-            if (draft.tabs.length <= 1) return;
-            const index = draft.tabs.findIndex((item) => item.id === id);
-            draft.tabs.splice(index, 1);
-            if (draft.activeTabId === id) {
-                draft.activeTabId = draft.tabs[Math.max(0, index - 1)].id;
-            }
-        }, { reason: 'panes' });
-    },
+const search = mountSearch({
+    onSubmit: applySymbol,
+    onScope: (value) => setSync('symbol', value),
 });
-
-const settingsDialog = createSettingsDialog({
-    getState,
-    update,
-    resetAll: reset,
-});
-
-const shortcutsDialog = createShortcutsDialog(SHORTCUTS);
 
 const header = mountHeader({
     onLayout: applyLayout,
     onSync: setSync,
     onTheme: toggleTheme,
-    onSnapshot: takeSnapshot,
-    onShortcuts: () => shortcutsDialog.open(),
-    onSettings: () => settingsDialog.open(),
 });
 
 // --- Actions ---
 
-function applyLayout(layout) {
+/**
+ * The master search: one typed symbol applied to the layout.
+ *
+ * Scope follows the symbol sync switch — every pane when it is on, the active
+ * pane alone when it is off — so the search box and the layout menu stay one
+ * setting rather than two that can contradict each other.
+ */
+function applySymbol(typed) {
+    const symbol = String(typed).trim().toUpperCase();
+    if (!symbol) return;
+
+    let skipped = 0;
+    const changed = [];
+
     update((draft) => {
-        const tab = draft.tabs.find((item) => item.id === draft.activeTabId);
-        setLayout(tab, layout);
+        const targets = draft.sync.symbol
+            ? draft.panes
+            : [draft.panes[draft.activePane] || draft.panes[0]];
+
+        for (const pane of targets) {
+            const next = symbolForPane(pane, symbol);
+            // Angel One has no listing for a foreign symbol. Leaving that pane
+            // on the symbol it was showing beats blanking it.
+            if (next === null) {
+                skipped += 1;
+                continue;
+            }
+            pane.symbol = next;
+            changed.push(pane);
+        }
     }, { reason: 'panes' });
 
-    const panes = activeTab().panes.length;
+    const notes = [];
+    // Catches the BSE / unprefixed intraday combination the widget refuses
+    // silently inside the iframe, where there is nothing to click. Any affected
+    // pane is worth reporting, not only the active one — with sync on, the
+    // active pane can be the one source that is fine.
+    const problem = changed.map(widgetIntradayProblem).find(Boolean);
+    if (problem) notes.push(problem.message);
+    if (skipped > 0) {
+        notes.push(skipped === 1
+            ? 'One Angel One pane kept its symbol — that source serves NSE listings only.'
+            : `${skipped} Angel One panes kept their symbols — that source serves NSE listings only.`);
+    }
+    if (notes.length > 0) notify(notes.join(' '));
+}
+
+function applyLayout(layout) {
+    update((draft) => setLayout(draft, layout), { reason: 'panes' });
+
+    const panes = layoutPanes(getState().layout);
     if (panes > HEAVY_LAYOUT_THRESHOLD) {
         notify(`${panes} charts are loading as ${panes} separate frames — this is memory and bandwidth heavy.`);
     }
@@ -121,9 +122,8 @@ function setSync(key, value) {
         if (!value) return;
         // Turning sync on levels the panes immediately, rather than waiting for
         // the next edit to reveal that they disagree.
-        const tab = draft.tabs.find((item) => item.id === draft.activeTabId);
-        const source = tab.panes[tab.activePane] || tab.panes[0];
-        for (const pane of tab.panes) {
+        const source = draft.panes[draft.activePane] || draft.panes[0];
+        for (const pane of draft.panes) {
             if (key === 'symbol') pane.symbol = source.symbol;
             if (key === 'interval') pane.interval = source.interval;
         }
@@ -136,57 +136,20 @@ function toggleTheme() {
     }, { reason: 'panes' });
 }
 
-async function takeSnapshot() {
-    const tab = activeTab();
-    const pane = tab.panes[tab.activePane] || tab.panes[0];
-    const name = `${pane.symbol.replace(/[^\w-]/g, '_')}_${pane.interval}`;
-    notify('Choose this tab in the capture prompt…');
-    const result = await captureWorkspace(name);
-    if (result.ok) {
-        notify('Snapshot saved.');
-    } else {
-        notify(result.reason || '');
-    }
-}
-
 function movePane(delta) {
     update((draft) => {
-        const tab = draft.tabs.find((item) => item.id === draft.activeTabId);
-        const count = layoutPanes(tab.layout);
-        tab.activePane = (tab.activePane + delta + count) % count;
+        const count = layoutPanes(draft.layout);
+        draft.activePane = (draft.activePane + delta + count) % count;
     }, { reason: 'chrome' });
 }
 
 bindShortcuts({
+    onSearch: () => search.focus(),
     onLayout: applyLayout,
     onLayoutMenu: () => document.getElementById('layoutBtn').click(),
     onTheme: toggleTheme,
-    onSnapshot: takeSnapshot,
-    onMaximise() {
-        const tab = activeTab();
-        update((draft) => {
-            const target = draft.tabs.find((item) => item.id === draft.activeTabId);
-            target.maximised = target.maximised === null ? tab.activePane : null;
-        }, { reason: 'panes' });
-    },
-    onNewTab: () => tabsHost.querySelector('.tab--add').click(),
-    onCloseTab() {
-        const state = getState();
-        if (state.tabs.length > 1) {
-            update((draft) => {
-                const index = draft.tabs.findIndex((item) => item.id === draft.activeTabId);
-                draft.tabs.splice(index, 1);
-                draft.activeTabId = draft.tabs[Math.max(0, index - 1)].id;
-            }, { reason: 'panes' });
-        }
-    },
     onPane: movePane,
-    onSettings: () => settingsDialog.open(),
-    onShortcuts: () => shortcutsDialog.open(),
-    onEscape() {
-        header.closeMenu();
-        for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
-    },
+    onEscape: () => header.closeMenu(),
 });
 
 // --- Ticker tape ---
@@ -217,24 +180,37 @@ function renderTicker(state) {
     });
 }
 
+/**
+ * The tape is decoration, and it loads a second vendor script and iframe that
+ * would otherwise compete with the charts for the connection pool. Holding it
+ * until the browser is idle gets the first chart on screen sooner.
+ */
+const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 200));
+let tickerStarted = false;
+
+function startTicker(state) {
+    if (tickerStarted) return;
+    tickerStarted = true;
+    idle(() => renderTicker(state));
+}
+
 // --- Render loop ---
 
 function render(state, meta = {}) {
-    const tab = activeTab();
-
     document.documentElement.dataset.theme = state.theme;
-    header.sync(state, tab);
-    tabStrip.render(state);
+    header.sync(state);
+    search.sync(state);
 
-    const pane = tab.panes[tab.activePane] || tab.panes[0];
+    const pane = state.panes[state.activePane] || state.panes[0];
     attributionHost.replaceChildren(attributionElement(pane.symbol));
 
     if (meta.reason !== 'chrome') {
-        renderTicker(state);
+        if (tickerStarted) renderTicker(state);
+        else startTicker(state);
     }
     // The grid diffs internally, so it is safe to call on every render; a
     // 'chrome' reason still needs it for the active-pane outline.
-    paneGrid.render(state, tab);
+    paneGrid.render(state);
 }
 
 subscribe((state, meta) => render(state, meta));
