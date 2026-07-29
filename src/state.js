@@ -74,7 +74,7 @@ function repair(stored) {
             interval: pane.interval || 'D',
             style: pane.style || '1',
             // Panes saved before a source existed default to the widget.
-            source: ['nse', 'tvfeed', 'advanced'].includes(pane.source) ? pane.source : 'tv',
+            source: ['tvfeed', 'advanced'].includes(pane.source) ? pane.source : 'tv',
         };
     });
 
@@ -90,6 +90,9 @@ function repair(stored) {
 
     if (!Array.isArray(next.panel.symbols)) next.panel.symbols = base.panel.symbols;
     if (!Array.isArray(next.ticker.symbols)) next.ticker.symbols = base.ticker.symbols;
+    // The decorative ticker opens a separate TradingView socket that is noisy
+    // under common local-dev/browser policies, and there is no UI to manage it.
+    next.ticker.enabled = false;
     if (!Array.isArray(next.chart.studies)) next.chart.studies = [];
 
     return next;

@@ -10,7 +10,7 @@
  */
 
 import {
-    chartSettings, intervalLabel, layoutById, layoutGeometry, nearestNseInterval,
+    chartSettings, intervalLabel, layoutById, layoutGeometry,
 } from './config.js';
 import { embedChart } from './widget.js';
 
@@ -27,10 +27,6 @@ import { embedChart } from './widget.js';
  * @type {Record<string, {label: string, load: () => Promise<Function>}>}
  */
 const IN_PAGE_SOURCES = {
-    nse: {
-        label: 'NSE',
-        load: () => import('./nse/chart.js').then((module) => module.mountNseChart),
-    },
     tvfeed: {
         label: 'feed',
         load: () => import('./tv/chart.js').then((module) => module.mountTvChart),
@@ -132,18 +128,12 @@ export function createPaneGrid(host, handlers) {
             entry.wrapper.classList.toggle('pane--active', index === state.activePane);
 
             const inPage = IN_PAGE_SOURCES[pane.source];
-            // NSE symbols carry no exchange prefix, and Angel One serves only a
-            // subset of intervals — show what the pane will actually load. The
-            // TradingView sources serve every interval the widget does.
-            const shownInterval = pane.source === 'nse'
-                ? nearestNseInterval(pane.interval)
-                : pane.interval;
             const suffix = inPage ? `  ·  ${inPage.label}` : '';
-            entry.label.textContent = `${pane.symbol}  ·  ${intervalLabel(shownInterval)}${suffix}`;
+            entry.label.textContent = `${pane.symbol}  ·  ${intervalLabel(pane.interval)}${suffix}`;
 
             // Every source is diffed the same way: rebuild only on real change.
             const settings = inPage
-                ? { source: pane.source, symbol: pane.symbol, interval: shownInterval, theme: state.theme }
+                ? { source: pane.source, symbol: pane.symbol, interval: pane.interval, theme: state.theme }
                 : chartSettings(state, pane, index === panelIndex);
 
             const signature = JSON.stringify(settings);
@@ -170,7 +160,7 @@ export function createPaneGrid(host, handlers) {
                     entry.chartHost.classList.remove('is-loading');
                     entry.handle = mount(entry.chartHost, {
                         symbol: pane.symbol,
-                        interval: shownInterval,
+                        interval: pane.interval,
                         theme: state.theme,
                         onError: handlers.onError,
                     });

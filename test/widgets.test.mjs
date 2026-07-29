@@ -216,21 +216,17 @@ test('layout ids from the previous build still resolve', () => {
     assert.equal(cfg.layoutById('nonsense').id, 'r:1');
 });
 
-test('the master search reshapes a symbol per data source', () => {
+test('the master search normalises symbols for every current data source', () => {
     const tv = { source: 'tv' };
-    const nse = { source: 'nse' };
+    const tvfeed = { source: 'tvfeed' };
+    const advanced = { source: 'advanced' };
 
     assert.equal(cfg.symbolForPane(tv, 'nasdaq:aapl'), 'NASDAQ:AAPL');
     assert.equal(cfg.symbolForPane(tv, '  aapl  '), 'AAPL');
-    // Angel One takes a bare ticker, so an NSE prefix has to come off.
-    assert.equal(cfg.symbolForPane(nse, 'NSE:RELIANCE'), 'RELIANCE');
-    assert.equal(cfg.symbolForPane(nse, 'reliance'), 'RELIANCE');
-    // ...and it has no listing at all for another venue, so the pane keeps
-    // whatever it was showing rather than going blank.
-    assert.equal(cfg.symbolForPane(nse, 'NASDAQ:AAPL'), null);
-    assert.equal(cfg.symbolForPane(nse, 'BSE:TCS'), null);
+    assert.equal(cfg.symbolForPane(tvfeed, 'NSE:RELIANCE'), 'NSE:RELIANCE');
+    assert.equal(cfg.symbolForPane(advanced, 'binance:btcusdt'), 'BINANCE:BTCUSDT');
     assert.equal(cfg.symbolForPane(tv, '   '), null);
-    // A pane saved before the NSE source existed carries no source field.
+    // A pane saved before pane sources existed carries no source field.
     assert.equal(cfg.symbolForPane({}, 'NSE:INFY'), 'NSE:INFY');
 });
 
@@ -248,7 +244,7 @@ test('state repairs a corrupt or truncated payload', async () => {
         version: 2,
         // Legacy layout id, too few panes, and junk fields.
         layout: '4',
-        panes: [{ symbol: 'NASDAQ:AAPL' }],
+        panes: [{ symbol: 'NASDAQ:AAPL', source: 'nse' }],
         activePane: 99,
         chart: null,
         panel: { symbols: 'not-an-array' },
@@ -261,7 +257,7 @@ test('state repairs a corrupt or truncated payload', async () => {
     assert.equal(loaded.panes.length, 4, 'pane list padded to the layout');
     assert.equal(loaded.activePane, 3, 'out-of-range active pane clamped');
     assert.ok(Array.isArray(loaded.panel.symbols), 'watchlist coerced to an array');
-    // Panes saved before the NSE source existed must default to the widget.
+    // Panes saved before pane sources existed, or with retired sources, must default to the widget.
     assert.ok(loaded.panes.every((pane) => pane.source === 'tv'), 'pane source defaulted');
     assert.ok(loaded.chart && typeof loaded.chart.timezone === 'string', 'chart defaults restored');
     assert.ok(loaded.sync && typeof loaded.sync.symbol === 'boolean', 'sync defaults added');

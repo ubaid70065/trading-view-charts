@@ -63,7 +63,10 @@ export function embedWidget({
 
     // The script replaces itself asynchronously, so watch for the iframe.
     const observer = new MutationObserver(() => {
-        if (container.querySelector('iframe')) settle(onReady);
+        const iframe = container.querySelector('iframe');
+        if (!iframe) return;
+        iframe.allow = iframe.allow ? `${iframe.allow}; unload` : 'unload';
+        settle(onReady);
     });
     observer.observe(container, { childList: true, subtree: true });
 
@@ -80,7 +83,11 @@ export function embedWidget({
     host.append(container);
 
     // Covers the case where the iframe lands before the observer attaches.
-    if (container.querySelector('iframe')) settle(onReady);
+    const initialFrame = container.querySelector('iframe');
+    if (initialFrame) {
+        initialFrame.allow = initialFrame.allow ? `${initialFrame.allow}; unload` : 'unload';
+        settle(onReady);
+    }
 
     return {
         destroy() {

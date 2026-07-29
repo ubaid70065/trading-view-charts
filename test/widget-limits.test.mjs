@@ -69,9 +69,10 @@ test('a properly prefixed symbol is left alone', () => {
     }
 });
 
-test('the Angel One source is never flagged — it is the way out', () => {
+test('in-page sources are never flagged by the widget-specific check', () => {
     for (const interval of INTERVALS.map((item) => item.value)) {
-        assert.equal(problem('RELIANCE', interval, 'nse'), null, interval);
+        assert.equal(problem('RELIANCE', interval, 'tvfeed'), null, interval);
+        assert.equal(problem('RELIANCE', interval, 'advanced'), null, interval);
     }
 });
 

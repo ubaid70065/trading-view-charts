@@ -18,14 +18,10 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
-import { hasCredentials, loadEnv } from './server/env.js';
-import { handleApi } from './server/routes.js';
+import { handleTv } from './server/tv-routes.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.argv[2] || process.env.PORT || 5500);
-
-// Credentials come from .env, which is gitignored and never served.
-loadEnv(ROOT);
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -71,6 +67,10 @@ const COMPRESS_MIN_BYTES = 1024;
  */
 const etagFor = (stats) => `W/"${stats.size.toString(16)}-${Math.floor(stats.mtimeMs).toString(16)}"`;
 
+const PERMISSIONS_POLICY = [
+    'unload=(self "https://www.tradingview-widget.com" "https://www.tradingview.com")',
+].join(', ');
+
 /**
  * Never served, whatever the URL says: secrets, server-side code, and the
  * instrument cache (33 MB of it).
@@ -103,7 +103,7 @@ const server = http.createServer(async (req, res) => {
 
     // API routes come first — they are not files on disk.
     try {
-        if (await handleApi(req, res, url, ROOT)) return;
+        if (await handleTv(req, res, url)) return;
     } catch (error) {
         console.error('[server] unhandled API error:', error);
         send(res, 500, 'Internal error');
@@ -139,6 +139,7 @@ const server = http.createServer(async (req, res) => {
         const headers = {
             'Content-Type': type,
             'Cache-Control': 'no-cache',
+            'Permissions-Policy': PERMISSIONS_POLICY,
             ETag: etag,
             Vary: 'Accept-Encoding',
         };
@@ -168,14 +169,14 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
     console.log(`Serving ${ROOT}`);
     console.log(`→ http://localhost:${PORT}`);
+    console.log('');
+    console.log('TradingView feed: /tv routes are live — no credentials needed.');
 
-    if (hasCredentials()) {
-        console.log('Angel One: credentials loaded — /api/quote and /api/candles are live.');
-    } else {
+    if (!fs.existsSync(path.join(ROOT, 'public', 'charting_library'))) {
         console.log('');
-        console.log('Angel One: no credentials, so NSE data endpoints return 503.');
-        console.log('Copy .env.example to .env and set SMARTAPI_KEY, SMARTAPI_CLIENT_CODE,');
-        console.log('SMARTAPI_PASSWORD and SMARTAPI_TOTP_SECRET. /api/search works without them.');
+        console.log('Advanced Charts is not installed, so those panes will say so.');
+        console.log('It is licensed per user: request access from TradingView, then put');
+        console.log('the charting_library folder in public/.');
     }
 });
 

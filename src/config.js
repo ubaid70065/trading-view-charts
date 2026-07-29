@@ -286,41 +286,17 @@ export function intervalLabel(value) {
     return found ? found.label : value;
 }
 
-/**
- * Intervals Angel One's historical endpoint serves.
- *
- * Here rather than in nse/chart.js because the pane grid needs to label and diff
- * an NSE pane without loading that module — it is imported on demand.
- */
-export const NSE_INTERVALS = ['1', '3', '5', '10', '15', '30', '60', 'D'];
-
-/** Angel One serves only the intervals above; map anything else to the nearest. */
-export function nearestNseInterval(interval) {
-    if (NSE_INTERVALS.includes(interval)) return interval;
-    const fallback = { 120: '60', 240: '60', W: 'D', M: 'D' };
-    return fallback[interval] || 'D';
-}
-
 /** Intervals every TradingView symbol can serve; the rest are intraday. */
 const CONTINUOUS_INTERVALS = ['D', 'W', 'M'];
 
 /**
- * The one combination the free embed widget refuses outright: an intraday
- * interval on a BSE listing. It reports this *inside* the iframe — "Only D, W,
- * M intervals are available for this symbol" — where the app cannot see it and
- * the user cannot act on it.
- *
- * This is a BSE limit, not an Indian-market one. Per TradingView's own scanner,
- * NSE symbols report `update_mode: streaming` — real-time, and free, which is
- * better than NASDAQ gets (`delayed_streaming_900`). BSE is the delayed,
- * end-of-day-charting one. An unprefixed symbol lets TradingView choose the
- * listing, and for a dual-listed Indian company it commonly picks BSE, so both
- * cases are caught before the pane loads.
+ * The free embed widget refuses intraday intervals for BSE end-of-day listings
+ * inside the cross-origin iframe, so the app warns before rebuilding the pane.
  *
  * @returns {null | {ticker: string, message: string}} null when the combination is fine.
  */
 export function widgetIntradayProblem({ source, symbol, interval }) {
-    if (source === 'nse') return null;
+    if (source !== 'tv') return null;
     if (CONTINUOUS_INTERVALS.includes(interval)) return null;
 
     const typed = String(symbol || '').trim().toUpperCase();
@@ -344,7 +320,7 @@ export function widgetIntradayProblem({ source, symbol, interval }) {
     if (prefix === '') {
         return {
             ticker,
-            message: `“${typed}” has no exchange prefix, so TradingView picks the listing itself `
+            message: `"${typed}" has no exchange prefix, so TradingView picks the listing itself `
                 + '— for a dual-listed Indian stock usually the BSE one, whose charts are '
                 + `end-of-day and refuse ${label}. NSE:${typed} is real-time on the free `
                 + 'widget and keeps the full toolbar.',
@@ -415,6 +391,16 @@ export const LOCALES = [
  * are the whole surface, so there is no tab list and nothing here is nested
  * behind one.
  */
+/**
+ * What a pane shows before anything is typed.
+ *
+ * Exchange-qualified on purpose. Bare `BTCUSD` resolves too, but TradingView
+ * picks the listing — currently Bitstamp, whose tick size is 1, so prices
+ * render rounded to whole dollars. Naming Coinbase pins a real BTC/USD pair
+ * with cent precision and keeps the default stable if TradingView re-ranks.
+ */
+export const DEFAULT_SYMBOL = 'COINBASE:BTCUSD';
+
 export function defaultState() {
     return {
         version: 2,
@@ -424,7 +410,7 @@ export function defaultState() {
         // than an edit box for whichever pane was clicked last.
         sync: { symbol: true, interval: false },
         layout: 'c:1-1',
-        panes: createPanes('c:1-1', 'NASDAQ:AAPL', 'D'),
+        panes: createPanes('c:1-1', DEFAULT_SYMBOL, 'D'),
         activePane: 0,
         chart: {
             locale: 'en',
@@ -445,7 +431,7 @@ export function defaultState() {
             symbols: ['NASDAQ:AAPL', 'NASDAQ:GOOGL', 'NASDAQ:MSFT', 'NASDAQ:AMZN'],
         },
         ticker: {
-            enabled: true,
+            enabled: false,
             symbols: [
                 { proName: 'FOREXCOM:SPXUSD', title: 'S&P 500' },
                 { proName: 'FOREXCOM:NSXUSD', title: 'US 100' },
@@ -462,8 +448,6 @@ export function defaultState() {
  * Where a pane gets its data.
  *
  *  'tv'     — TradingView's embed widget. Their data, their full UI.
- *  'nse'    — Angel One via this app's /api routes, drawn with Lightweight
- *             Charts. The only source that can show your own feed.
  *  'tvfeed' — TradingView's widget socket via this app's /tv routes, drawn with
  *             Lightweight Charts. Every exchange the embed carries, but on a
  *             canvas this app owns — so panes can be linked, themed and read.
@@ -474,33 +458,28 @@ export function defaultState() {
  */
 export const PANE_SOURCES = [
     { value: 'tv', label: 'TradingView widget' },
-    { value: 'nse', label: 'NSE — Angel One' },
     { value: 'tvfeed', label: 'TradingView feed' },
     { value: 'advanced', label: 'Advanced Charts' },
 ];
 
 /**
- * The form a typed symbol has to take for one pane's data source.
+ * The form a typed symbol has to take for a pane.
  *
- * The widget wants EXCHANGE:TICKER and Angel One wants a bare NSE ticker, so the
- * master search cannot hand the same string to both. Angel One also serves NSE
- * listings only, and a symbol from any other venue has no equivalent there.
+ * Every source now speaks the same dialect — EXCHANGE:TICKER, as TradingView
+ * writes it — so this only normalises. It stays a function because the search
+ * box needs one place to reject an empty entry, and because a source with its
+ * own spelling can be added back here rather than at every call site.
  *
  * @param {{source?: string}} pane
  * @param {string} typed
- * @returns {string|null} null when this pane cannot show the symbol at all.
+ * @returns {string|null} null when there is nothing to show.
  */
 export function symbolForPane(pane, typed) {
     const symbol = String(typed || '').trim().toUpperCase();
-    if (!symbol) return null;
-    if (pane.source !== 'nse') return symbol;
-
-    const colon = symbol.indexOf(':');
-    if (colon === -1) return symbol;
-    return symbol.slice(0, colon) === 'NSE' ? symbol.slice(colon + 1) : null;
+    return symbol || null;
 }
 
-export function createPanes(layout, symbol = 'NASDAQ:AAPL', interval = 'D') {
+export function createPanes(layout, symbol = DEFAULT_SYMBOL, interval = 'D') {
     const count = layoutPanes(layout);
     return Array.from({ length: count }, () => ({ symbol, interval, style: '1', source: 'tv' }));
 }
